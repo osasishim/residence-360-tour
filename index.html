@@ -1,0 +1,438 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Residence 360 Tour</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..700&family=Instrument+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed WebGL panorama, quiet glass chrome pinned to corners, room strip along the bottom edge. */
+:root {
+  --ink: #f3ece2;          /* warm plaster white for text */
+  --ink-dim: #c9bba8;
+  --glass: rgba(28, 22, 17, 0.58);  /* smoked walnut, matches the ceiling beams */
+  --glass-edge: rgba(243, 236, 226, 0.16);
+  --accent: #d9a66b;       /* brass, from the lighting fixtures */
+  --ground: #16110d;
+  --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; }
+[hidden] { display: none !important; }
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  overflow: hidden;
+  -webkit-user-select: none; user-select: none;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+#stage { position: fixed; inset: 0; }
+canvas#view {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  cursor: grab; touch-action: none; display: block;
+  transition: opacity .35s ease, filter .35s ease;
+}
+canvas#view.dragging { cursor: grabbing; }
+canvas#view.fading { opacity: 0; filter: blur(6px); }
+
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-edge);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  backdrop-filter: blur(14px) saturate(1.2);
+  border-radius: 14px;
+}
+
+header.info {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  left: max(16px, env(safe-area-inset-left, 0px));
+  padding: 12px 16px;
+  display: grid; gap: 2px;
+  max-width: calc(100% - 140px);
+}
+.eyebrow {
+  font-family: var(--font-display);
+  font-stretch: 112%;
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--accent);
+}
+h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-stretch: 80%;
+  font-weight: 650;
+  font-size: clamp(20px, 3.2vw, 30px);
+  line-height: 1.05;
+  text-wrap: balance;
+}
+.readout {
+  font-size: 12px; color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+}
+
+.tools {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 16px);
+  right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; gap: 6px; padding: 6px;
+}
+.tools button {
+  width: 38px; height: 38px; border-radius: 9px;
+  border: 0; background: transparent; color: var(--ink);
+  display: grid; place-items: center; cursor: pointer;
+}
+.tools button:hover { background: rgba(243,236,226,.1); }
+.tools button[aria-pressed="true"] { color: var(--accent); background: rgba(217,166,107,.14); }
+.tools svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+nav.rooms {
+  position: fixed;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  left: 0; right: 0; margin-inline: auto; width: fit-content;
+  display: flex; gap: 8px; padding: 8px;
+  max-width: calc(100% - 32px);
+  overflow-x: auto;
+}
+.room {
+  flex: 0 0 auto;
+  display: grid; grid-template-columns: 64px auto; align-items: center; gap: 10px;
+  padding: 6px 14px 6px 6px;
+  border-radius: 10px; border: 1px solid transparent;
+  background: transparent; color: var(--ink);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.room:hover { background: rgba(243,236,226,.08); }
+.room[aria-current="true"] { border-color: var(--accent); background: rgba(217,166,107,.12); }
+.room .thumb {
+  width: 64px; height: 40px; border-radius: 6px;
+  background-size: 200% 100%; background-position: 50% 55%;
+}
+.room .name { font-family: var(--font-display); font-stretch: 85%; font-weight: 600; font-size: 14px; line-height: 1.1; }
+.room .meta { font-size: 11px; color: var(--ink-dim); }
+
+.hint {
+  position: fixed; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 10px 16px; font-size: 13px;
+  pointer-events: none;
+  transition: opacity .6s ease;
+}
+.hint.gone { opacity: 0; }
+
+/* hotspots: doorway markers linking rooms */
+#spots { position: fixed; inset: 0; pointer-events: none; }
+.spot {
+  position: absolute; left: 0; top: 0;
+  pointer-events: auto; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  border: 0; background: none; padding: 0; color: var(--ink); font: inherit;
+  will-change: transform;
+}
+.spot .ring {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: rgba(22,17,13,.35);
+  display: grid; place-items: center;
+  box-shadow: 0 0 0 0 rgba(217,166,107,.6);
+  animation: pulse 2.4s ease-out infinite;
+  margin-left: -17px; margin-top: 0;
+}
+.spot .ring::after { content: ""; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+.spot .label {
+  padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  background: var(--glass); border: 1px solid var(--glass-edge);
+  white-space: nowrap; opacity: 0; transform: translateX(-4px);
+  transition: opacity .2s, transform .2s;
+}
+.spot:hover .label, .spot:focus-visible .label { opacity: 1; transform: none; }
+.spot:focus-visible .ring, .tools button:focus-visible, .room:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(217,166,107,.55); } 70%,100% { box-shadow: 0 0 0 14px rgba(217,166,107,0); } }
+
+@media (max-width: 900px) { .room .meta { display: none; } }
+@media (max-width: 560px) {
+  .room { grid-template-columns: 44px auto; padding-right: 10px; }
+  .room .thumb { width: 44px; height: 32px; }
+  header.info { max-width: calc(100% - 120px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spot .ring { animation: none; }
+  canvas#view { transition: none; }
+}
+#err { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
+</style>
+
+<div id="stage"><canvas id="view" aria-label="360 degree panorama, drag to look around"></canvas></div>
+<div id="spots"></div>
+
+<header class="info glass">
+  <span class="eyebrow" id="eyebrow">Room 1 of 3</span>
+  <h1 id="roomTitle">Kitchen &amp; Living</h1>
+  <span class="readout" id="readout">Heading 000° · FOV 75°</span>
+</header>
+
+<div class="tools glass" role="toolbar" aria-label="View controls">
+  <button id="btnRotate" aria-pressed="true" title="Auto-rotate">
+    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4h-4"/></svg>
+  </button>
+  <button id="btnFull" title="Fullscreen">
+    <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+  </button>
+</div>
+
+<nav class="rooms glass" id="rooms" aria-label="Rooms"></nav>
+<div class="hint glass" id="hint">Drag to look around · scroll or pinch to zoom</div>
+<div id="err" hidden></div>
+
+<script>
+(() => {
+  const ROOMS = [
+    { id: "kitchen", title: "Kitchen & Living", meta: "Breakfast bar · beamed ceiling", src: "1.jpg", yaw: 40,
+      spots: [ { u: 470, v: 330, to: "lounge", label: "Go to Lounge & Dining" } ] },
+    { id: "bedroom", title: "Bedroom", meta: "Lancet windows · study nook", src: "2.jpg", yaw: 0,
+      spots: [ { u: 918, v: 330, to: "lounge", label: "Go to Lounge & Dining" } ] },
+    { id: "lounge", title: "Lounge & Dining", meta: "Slatted feature wall", src: "3.jpg", yaw: -20,
+      spots: [ { u: 190, v: 340, to: "bedroom", label: "Go to Bedroom" },
+               { u: 450, v: 300, to: "kitchen", label: "Go to Kitchen" } ] },
+  ];
+  const IMG_W = 1280, IMG_H = 640;
+  const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+
+  const canvas = document.getElementById("view");
+  const gl = canvas.getContext("webgl", { antialias: false, premultipliedAlpha: false });
+  if (!gl) {
+    const e = document.getElementById("err");
+    e.textContent = "This browser can't show the 3D view because WebGL is turned off or unavailable.";
+    e.hidden = false; return;
+  }
+
+  // Fullscreen triangle; the fragment shader casts a ray per pixel into the equirectangular image.
+  const vs = `attribute vec2 p; varying vec2 v; void main(){ v=p; gl_Position=vec4(p,0.,1.); }`;
+  const fs = `precision highp float;
+    varying vec2 v; uniform sampler2D tex;
+    uniform vec3 fwd, right, up; uniform float tanH, aspect;
+    const float PI = 3.14159265359;
+    void main(){
+      vec3 d = normalize(fwd + right * v.x * tanH * aspect + up * v.y * tanH);
+      float lon = atan(d.x, -d.z);
+      float lat = asin(clamp(d.y, -1., 1.));
+      vec2 uv = vec2(fract(lon / (2.*PI) + .5), .5 - lat / PI);
+      gl_FragColor = texture2D(tex, uv);
+    }`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)); return s; };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "p"); gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const U = n => gl.getUniformLocation(prog, n);
+  const uF = U("fwd"), uR = U("right"), uU = U("up"), uT = U("tanH"), uA = U("aspect");
+
+  const textures = {};
+  const images = {};
+  function loadImage(room) {
+    if (images[room.id]) return images[room.id];
+    images[room.id] = new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => {
+        const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+        textures[room.id] = t; res(t);
+      };
+      img.onerror = () => rej(new Error("Could not load " + room.src));
+      img.src = room.src;
+    });
+    return images[room.id];
+  }
+
+  // Camera state
+  let yaw = 0, pitch = 0, fov = 75, vYaw = 0, vPitch = 0;
+  let current = null, autoRotate = true, lastInteract = 0;
+  const FOV_MIN = 35, FOV_MAX = 100;
+
+  function basis() {
+    const cy = Math.cos(rad(yaw)), sy = Math.sin(rad(yaw)), cp = Math.cos(rad(pitch)), sp = Math.sin(rad(pitch));
+    const f = [sy * cp, sp, -cy * cp];
+    const r = [cy, 0, sy];
+    const u = [r[1]*f[2]-r[2]*f[1], r[2]*f[0]-r[0]*f[2], r[0]*f[1]-r[1]*f[0]];
+    return { f, r, u };
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    gl.viewport(0, 0, w, h);
+  }
+
+  // Hotspots
+  const spotLayer = document.getElementById("spots");
+  let spotEls = [];
+  function buildSpots(room) {
+    spotLayer.innerHTML = "";
+    spotEls = room.spots.map(s => {
+      const lon = (s.u / IMG_W - 0.5) * 2 * Math.PI, lat = (0.5 - s.v / IMG_H) * Math.PI;
+      const dir = [Math.sin(lon) * Math.cos(lat), Math.sin(lat), -Math.cos(lon) * Math.cos(lat)];
+      const b = document.createElement("button");
+      b.className = "spot"; b.setAttribute("aria-label", s.label);
+      b.innerHTML = `<span class="ring"></span><span class="label">${s.label}</span>`;
+      b.addEventListener("click", e => { e.stopPropagation(); go(s.to, deg(lon)); });
+      b.addEventListener("pointerdown", e => e.stopPropagation());
+      spotLayer.appendChild(b);
+      return { el: b, dir };
+    });
+  }
+  function placeSpots(B, tanH, aspect, W, H) {
+    for (const s of spotEls) {
+      const d = s.dir;
+      const z = d[0]*B.f[0] + d[1]*B.f[1] + d[2]*B.f[2];
+      if (z <= 0.05) { s.el.style.visibility = "hidden"; continue; }
+      const x = (d[0]*B.r[0] + d[1]*B.r[1] + d[2]*B.r[2]) / (z * tanH * aspect);
+      const y = (d[0]*B.u[0] + d[1]*B.u[1] + d[2]*B.u[2]) / (z * tanH);
+      if (Math.abs(x) > 1.2 || Math.abs(y) > 1.2) { s.el.style.visibility = "hidden"; continue; }
+      s.el.style.visibility = "visible";
+      s.el.style.transform = `translate(${(x * 0.5 + 0.5) * W}px, ${(0.5 - y * 0.5) * H - 17}px)`;
+    }
+  }
+
+  const readout = document.getElementById("readout");
+  let lastReadout = "";
+  function frame(t) {
+    resize();
+    const now = performance.now();
+    // inertia
+    if (!dragging) {
+      yaw += vYaw; pitch += vPitch; vYaw *= 0.92; vPitch *= 0.92;
+      if (autoRotate && now - lastInteract > 2500 && !reduceMotion) yaw += 0.035;
+    }
+    pitch = Math.max(-85, Math.min(85, pitch));
+    yaw = ((yaw + 180) % 360 + 360) % 360 - 180;
+
+    const B = basis(), tanH = Math.tan(rad(fov) / 2), aspect = canvas.width / canvas.height;
+    if (current && textures[current.id]) {
+      gl.bindTexture(gl.TEXTURE_2D, textures[current.id]);
+      gl.uniform3fv(uF, B.f); gl.uniform3fv(uR, B.r); gl.uniform3fv(uU, B.u);
+      gl.uniform1f(uT, tanH); gl.uniform1f(uA, aspect);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    placeSpots(B, tanH, aspect, canvas.clientWidth, canvas.clientHeight);
+    const heading = Math.round((yaw + 360) % 360);
+    const txt = `Heading ${String(heading).padStart(3, "0")}° · Tilt ${pitch >= 0 ? "+" : "−"}${String(Math.abs(Math.round(pitch))).padStart(2, "0")}° · FOV ${Math.round(fov)}°`;
+    if (txt !== lastReadout) { readout.textContent = txt; lastReadout = txt; }
+    requestAnimationFrame(frame);
+  }
+
+  // Input
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const pointers = new Map();
+  let dragging = false, lastX = 0, lastY = 0, pinchDist = 0, pinchFov = fov;
+  const hint = document.getElementById("hint");
+  const touched = () => { lastInteract = performance.now(); hint.classList.add("gone"); };
+  canvas.addEventListener("pointerdown", e => {
+    canvas.setPointerCapture(e.pointerId);
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 1) { dragging = true; lastX = e.clientX; lastY = e.clientY; vYaw = vPitch = 0; canvas.classList.add("dragging"); }
+    if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinchDist = Math.hypot(a.x-b.x, a.y-b.y); pinchFov = fov; }
+    touched();
+  });
+  canvas.addEventListener("pointermove", e => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x-b.x, a.y-b.y);
+      if (pinchDist > 0) fov = Math.max(FOV_MIN, Math.min(FOV_MAX, pinchFov * pinchDist / d));
+    } else if (dragging) {
+      const k = fov / canvas.clientHeight;
+      const dx = (e.clientX - lastX) * k, dy = (e.clientY - lastY) * k;
+      yaw -= dx; pitch += dy; vYaw = -dx; vPitch = dy;
+      lastX = e.clientX; lastY = e.clientY;
+    }
+    touched();
+  });
+  const end = e => {
+    pointers.delete(e.pointerId);
+    if (pointers.size === 0) { dragging = false; canvas.classList.remove("dragging"); }
+    else if (pointers.size === 1) { const p = [...pointers.values()][0]; lastX = p.x; lastY = p.y; }
+  };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+  canvas.addEventListener("wheel", e => {
+    e.preventDefault();
+    fov = Math.max(FOV_MIN, Math.min(FOV_MAX, fov * Math.exp(e.deltaY * 0.001)));
+    touched();
+  }, { passive: false });
+  window.addEventListener("keydown", e => {
+    const step = 4;
+    if (e.key === "ArrowLeft") yaw -= step; else if (e.key === "ArrowRight") yaw += step;
+    else if (e.key === "ArrowUp") pitch += step; else if (e.key === "ArrowDown") pitch -= step;
+    else if (e.key === "+" || e.key === "=") fov = Math.max(FOV_MIN, fov - 5);
+    else if (e.key === "-") fov = Math.min(FOV_MAX, fov + 5);
+    else if (/^[1-3]$/.test(e.key)) go(ROOMS[+e.key - 1].id);
+    else return;
+    touched();
+  });
+
+  // Rooms UI
+  const nav = document.getElementById("rooms");
+  ROOMS.forEach((r, i) => {
+    const b = document.createElement("button");
+    b.className = "room"; b.id = "room-" + r.id; b.dataset.id = r.id;
+    b.innerHTML = `<span class="thumb" style="background-image:url('${r.src}')"></span>
+      <span><div class="name">${r.title}</div><div class="meta">${r.meta}</div></span>`;
+    b.addEventListener("click", () => go(r.id));
+    nav.appendChild(b);
+  });
+
+  let switching = false;
+  async function go(id, arriveYaw) {
+    const room = ROOMS.find(r => r.id === id) || ROOMS[0];
+    if (current && room.id === current.id) return;
+    if (switching) return; switching = true;
+    const first = !current;
+    if (!first) { canvas.classList.add("fading"); await new Promise(r => setTimeout(r, reduceMotion ? 0 : 320)); }
+    try { await loadImage(room); } catch (err) { console.error(err); }
+    current = room;
+    yaw = arriveYaw !== undefined ? arriveYaw : room.yaw; pitch = 0; vYaw = vPitch = 0;
+    if (!first) fov = 75;
+    buildSpots(room);
+    const i = ROOMS.indexOf(room);
+    document.getElementById("roomTitle").textContent = room.title;
+    document.getElementById("eyebrow").textContent = `Room ${i + 1} of ${ROOMS.length}`;
+    nav.querySelectorAll(".room").forEach(b => b.setAttribute("aria-current", b.dataset.id === room.id ? "true" : "false"));
+    if (location.hash !== "#" + room.id) history.replaceState(null, "", "#" + room.id);
+    canvas.classList.remove("fading");
+    switching = false;
+    ROOMS.forEach(loadImage); // warm the others
+  }
+  window.addEventListener("hashchange", () => go(location.hash.slice(1)));
+
+  // Tools
+  const btnRotate = document.getElementById("btnRotate");
+  btnRotate.addEventListener("click", () => { autoRotate = !autoRotate; btnRotate.setAttribute("aria-pressed", String(autoRotate)); lastInteract = 0; });
+  document.getElementById("btnFull").addEventListener("click", () => {
+    const el = document.documentElement;
+    try {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+    } catch (e) {}
+  });
+
+  setTimeout(() => hint.classList.add("gone"), 5000);
+  go(location.hash.slice(1) || ROOMS[0].id);
+  requestAnimationFrame(frame);
+})();
+</script>
